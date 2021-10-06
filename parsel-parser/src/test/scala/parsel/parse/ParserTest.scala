@@ -15,7 +15,7 @@ class ParserTest extends AnyFreeSpec with Matchers {
         |""".stripMargin
     ) shouldEqual Module(Seq(
       Assign(Seq(Name("x")), Constant(IntegerLiteral(BigInt(10))), None),
-      Assign(Seq(ConstructTuple(Seq(Name("x"), Name("y")), Load)), Constant(IntegerLiteral(BigInt(10))), None)))
+      Assign(Seq(ConstructTuple(Seq(Name("x"), Name("y")), Store)), Constant(IntegerLiteral(BigInt(10))), None)))
   }
 
   Option(getClass.getClassLoader.getResource("test1.py"))

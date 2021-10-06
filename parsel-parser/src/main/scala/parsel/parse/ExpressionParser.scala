@@ -2,7 +2,7 @@ package parsel
 package parse
 
 import ast._
-import parsel.ast.Util.{KWOnlyParams, Param}
+import parsel.ast.Util.{Param, Params}
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
@@ -92,24 +92,22 @@ object ExpressionParser {
 
 
   def lambda_params(tokens: Lexer): Arguments = {
-    @tailrec def impl(accum: (Seq[Param], Seq[Param], KWOnlyParams), hadDefault: Boolean, kwOnly: Boolean): (Seq[Param], Seq[Param], KWOnlyParams) = {
-      val (posOnlyParams, accumParams, kwParams) = accum
-
+    @tailrec def impl(accum: Params, hadDefault: Boolean, kwOnly: Boolean): Params = {
       tokens.peek match {
         case Operator("**") =>
           tokens.next()
           val Word(name) = tokens.expect(Word, "identifier")
           if (tokens.peek == Comma)
             tokens.next()
-          (posOnlyParams, accumParams, kwParams.copy(kwParam = Some(Param(Name(name), None, None))))
+          accum.withKwParam(name)
         case Operator("/") =>
-          if (posOnlyParams.nonEmpty || kwParams.nonEmpty || hadDefault) {
+          if (accum.hasKws) {
             throw Parser.Error("Unexpected /", tokens.currentOffset)
           }
           tokens.next()
           if (tokens.peek == Comma)
             tokens.next()
-          impl((accumParams, Seq.empty, kwParams), hadDefault, kwOnly)
+          impl(accum.toPosOnly, hadDefault, kwOnly)
         case Operator("*") =>
           tokens.next()
           tokens.peek match {
@@ -117,29 +115,29 @@ object ExpressionParser {
               tokens.next()
               impl(accum, hadDefault, kwOnly = true)
             case _ =>
-              if (kwParams.vararg.nonEmpty) {
+              if (accum.varArg.nonEmpty) {
                 throw Parser.Error("Invalid syntax", tokens.currentOffset)
               }
               val Word(id) = tokens.expect(Word, "identifier")
               if (tokens.peek == Comma)
                 tokens.next()
-              impl((posOnlyParams, accumParams, kwParams.copy(vararg = Some(Param(Name(id), None, None)))), false, kwOnly = true)
+              impl(accum.withVarArg(id), false, kwOnly = true)
           }
         case Colon => accum
         case _ =>
           val nextParam = lambda_param(tokens, !hadDefault || kwOnly)
           val next = if (kwOnly)
-            (posOnlyParams, accumParams, kwParams.copy(kwOnlyParams = kwParams.kwOnlyParams :+ nextParam))
+            accum.withKwOnlyParam(nextParam)
           else
-            (posOnlyParams, accumParams :+ nextParam, kwParams)
+            accum.withParam(nextParam)
           if (tokens.peek == Comma)
             tokens.next()
           impl(next, hadDefault || nextParam.default.nonEmpty, kwOnly)
       }
 
     }
-    val (posOnly, posArgs, kwArgs) = impl((Seq.empty, Seq.empty, KWOnlyParams(None, Seq.empty, None)), false, false)
-    Arguments.fromParams(posOnly, posArgs, Option(kwArgs).filter(_.nonEmpty))
+    val params = impl(Params.empty, false, false)
+    Arguments.fromParams(params)
   }
 
 
@@ -539,7 +537,7 @@ object ExpressionParser {
       startingWith
   }
 
-  private def slices(tokens: Lexer): Seq[Expr] = {
+  private def slices(tokens: Lexer): Seq[Slice] = {
     tokens.expect(LBracket)
     val slices = ArrayBuffer(slice(tokens))
     while (tokens.peek != RBracket) {

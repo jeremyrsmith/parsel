@@ -13,18 +13,19 @@ object Tree {
   def formatElse(orElse: Seq[Statement], prefix: String, indent: String): String = if (orElse.nonEmpty) s"\n${prefix}else:\n" + Tree.formatBlock(orElse, prefix, indent) else ""
 }
 
-sealed trait Mod extends Tree
-final case class Module(body: Seq[Statement]) extends Mod {
+
+final case class Module(body: Seq[Statement]) extends Tree {
   def pretty(indent: String): String = body.map(_.pretty("", indent)).mkString("\n")
   override def pretty: String = pretty("    ")
+
 }
 
-final case class Interactive(body: Seq[Statement]) extends Mod {
+final case class Interactive(body: Seq[Statement]) extends Tree {
   override def pretty: String = pretty("    ")
   def pretty(indent: String): String = body.map(_.pretty("", indent)).mkString("\n")
 }
 
-final case class Expression(body: Expr) extends Mod {
+final case class Expression(body: Expr) extends Tree {
   override def pretty: String = body.pretty
 }
 
@@ -32,9 +33,8 @@ sealed trait Statement extends Tree {
   def pretty(prefix: String, indent: String): String
   def pretty(prefix: String): String = pretty(prefix, "    ")
   override def pretty: String = pretty("")
-}
 
-sealed trait Definition extends Statement
+}
 
 final case class FunctionDef(
   name: Name,
@@ -48,6 +48,8 @@ final case class FunctionDef(
     val annot = returns.fold("")(expr => s" -> ${expr.pretty} ")
     s"${Tree.formatDecorators(decoratorList, prefix)}${prefix}def ${name.pretty}(${args.pretty})$annot:\n${Tree.formatBlock(body, prefix, indent)}"
   }
+
+  def toAsyncFunctionDef: AsyncFunctionDef = AsyncFunctionDef(name, args, body, decoratorList, returns, typeComment)
 }
 
 final case class AsyncFunctionDef(
@@ -62,6 +64,8 @@ final case class AsyncFunctionDef(
     val annot = returns.fold("")(expr => s" -> ${expr.pretty} ")
     s"${Tree.formatDecorators(decoratorList, prefix)}${prefix}async def ${name.pretty}(${args.pretty})$annot:\n${Tree.formatBlock(body, prefix, indent)}"
   }
+
+  def toFunctionDef: FunctionDef = FunctionDef(name, args, body, decoratorList, returns, typeComment)
 }
 
 final case class ClassDef(
@@ -70,11 +74,12 @@ final case class ClassDef(
   keywords: Seq[Keyword],
   body: Seq[Statement],
   decoratorList: Seq[Expr]
-) extends Definition {
+) extends Statement {
   val basesPretty = Option(bases.map(_.pretty).mkString(", ")).filter(_.nonEmpty)
   val kwsPretty = Option(keywords.map(_.pretty).mkString(", ")).filter(_.nonEmpty)
   override def pretty(prefix: String, indent: String): String =
     s"${Tree.formatDecorators(decoratorList, prefix)}${prefix}class ${name.pretty}(${Seq(basesPretty, kwsPretty).flatten.mkString(", ")}):\n${Tree.formatBlock(body, prefix, indent)}"
+
 }
 
 final case class Return(value: Option[Expr]) extends Statement {
@@ -182,7 +187,14 @@ final case class Continue() extends Statement {
   override def pretty(prefix: String, indent: String): String = prefix + "continue"
 }
 
-sealed trait Expr extends Tree
+sealed trait Expr extends Tree {
+  private[parsel] final def withExprContext(ctx: ExprContext): Expr = {
+    val exprTransformer = new ExprTransformer {
+      override def transformExprContext(ctxOld: ExprContext): ExprContext = ctx
+    }
+    exprTransformer.transformExpr(this)
+  }
+}
 
 final case class Name(name: String) extends Expr {
   override def pretty: String = name
@@ -289,19 +301,26 @@ final case class Call(func: Expr, args: Seq[Expr], keywords: Seq[Keyword]) exten
   }
 }
 
-final case class FormattedValue(value: Expr, conversion: Option[Int], formatSpec: Option[Expr]) extends Expr {
+final case class FormattedValue(value: Expr, conversion: Option[Int], formatSpec: Option[JoinedStr]) extends Expr {
   override def pretty: String = {
     val conversionPretty = conversion.filterNot(_ <= 0).filter(_ < 128).map(i => "!" + Character.toString(i.toChar)).getOrElse("")
     val formatPretty = formatSpec.map {
-      case JoinedStr(values) => ":" + values.map(_.pretty).mkString // ???
-      case expr => ":" + expr.pretty
+      case JoinedStr(values) => ":" + values.map {
+        case Constant(literal) =>
+          literal match {
+            case s: StringLiteral => s.escaped
+            case b: BytesLiteral  => b.escaped
+            case l => l.pretty
+          }
+        case expr => expr.pretty
+      }.mkString
     }.getOrElse("")
     s"{${value.pretty}$conversionPretty$formatPretty}"
   }
 }
 
 final case class JoinedStr(values: Seq[Expr]) extends Expr {
-  override def pretty: String = "f\"\"\"" + values.map {
+  override def pretty: String = "f'" + values.map {
     case Constant(literal) =>
       literal match {
         case s: StringLiteral => s.escaped
@@ -309,7 +328,7 @@ final case class JoinedStr(values: Seq[Expr]) extends Expr {
         case l => l.pretty
       }
     case expr => expr.pretty
-  }.mkString + "\"\"\""
+  }.mkString + "'"
 }
 
 final case class Constant[A](value: Literal[A]) extends Expr {
@@ -394,7 +413,7 @@ sealed abstract class NumericLiteral[A <: Number : Numeric] extends Literal[A] {
   def numeric: Numeric[A] = implicitly
   override def pretty: String = value.toString
 }
-final case class LongLiteral(value: BigInt) extends NumericLiteral[BigInt]
+
 final case class IntegerLiteral(value: BigInt) extends NumericLiteral[BigInt]
 final case class FloatLiteral(value: BigDecimal) extends NumericLiteral[BigDecimal]
 final case class ImaginaryLiteral(value: BigDecimal) extends NumericLiteral[BigDecimal] {
@@ -533,23 +552,22 @@ final case class Arguments(
     val strs = Seq(posOnlyPretty, posOnlySep, argsPretty, kwSep, kwsPretty, kwArgPretty).flatten
     strs.mkString(",")
   }
+
 }
 
 object Arguments {
   import Util._
   val empty: Arguments = Arguments(Nil, Nil, None, Nil, Nil, None, Nil)
-  def fromParams(posOnly: Seq[Param], params: Seq[Param], kws: Option[KWOnlyParams]): Arguments = {
-    val kwOnlyArgs = kws.toSeq.flatMap(_.kwOnlyParams)
-    Arguments(
-      posOnlyArgs = posOnly.toArgs,
-      args = params.toArgs,
-      varArg = kws.flatMap(_.vararg.map(_.arg)),
-      kwOnlyArgs = kwOnlyArgs.toArgs,
-      kwDefaults = kwOnlyArgs.paddedDefaults,
-      kwArg = kws.flatMap(_.kwParam.map(_.arg)),
-      defaults = posOnly.defaults ++ params.defaults
-    )
-  }
+
+  def fromParams(params: Params): Arguments = Arguments(
+    posOnlyArgs = params.posOnlyParams.toArgs,
+    args = params.params.toArgs,
+    varArg = params.varArg.map(_.arg),
+    kwOnlyArgs = params.kwOnlyParams.toArgs,
+    kwDefaults = params.kwOnlyParams.paddedDefaults,
+    kwArg = params.kwParam.map(_.arg),
+    defaults = params.posOnlyParams.defaults ++ params.params.defaults
+  )
 
   implicit class OptionOps(val self: Option[Arguments]) extends AnyVal {
     def orEmpty: Arguments = self.getOrElse(empty)
@@ -575,10 +593,12 @@ final case class Keyword(arg: Option[Name], value: Expr) extends Tree {
 
 final case class Alias(name: Name, asName: Option[Name]) extends Tree {
   override def pretty: String = Seq(Some(name), asName).flatten.map(_.pretty).mkString(" as ")
+
 }
 
 final case class WithItem(contentExpr: Expr, optionalVars: Option[Expr]) extends Tree {
   override def pretty: String = Seq(Some(contentExpr), optionalVars).flatten.map(_.pretty).mkString(" as ")
+
 }
 
 sealed trait Position {

@@ -2,7 +2,7 @@ package parsel
 package parse
 
 import ast.{Keyword => ASTKeyword, _}
-import parsel.ast.Util.{KWOnlyParams, Param}
+import parsel.ast.Util.{Param, Params}
 import parsel.parse.ExpressionParser.{named_expression, singleOrTuple, yield_expr}
 import parsel.parse.Lexer._
 
@@ -158,7 +158,7 @@ object Parser {
               if (lhss.size != 1) {
                 throw Parser.Error("only single target (not tuple) can be annotated", pos)
               }
-              val lhs = lhss.head
+              val lhs = lhss.head.withExprContext(Store)
               if (lhs.isInstanceOf[Starred]) {
                 throw Parser.Error("invalid syntax", tokens.currentOffset)
               }
@@ -186,7 +186,7 @@ object Parser {
               }
 
               val (targets, rhs) = collect_targets(Seq(singleOrTuple(lhss)))
-              Assign(targets, rhs, None)
+              Assign(targets.map(_.withExprContext(Store)), rhs, None)
           }
 
         case _ =>
@@ -196,7 +196,7 @@ object Parser {
           // this greedily took, but we have to go back and make sure it's not a function call
           lhs match {
             case Call(_, _, _) => throw Parser.Error("cannot assign to function call", pos)
-            case _ =>
+            case lhs => lhs.withExprContext(Store)
           }
 
           val opPos = tokens.currentOffset
@@ -326,7 +326,7 @@ object Parser {
 
     def del_stmt(tokens: Lexer): Statement = {
       tokens.expect(Keyword("del"))
-      Delete(del_targets(tokens))
+      Delete(del_targets(tokens).map(_.withExprContext(Del)))
     }
 
     def del_targets(tokens: Lexer): Seq[Expr] = {
@@ -426,27 +426,26 @@ object Parser {
     }
 
     def parameters(tokens: Lexer): Arguments = {
-      @tailrec def impl(accum: (Seq[Param], Seq[Param], KWOnlyParams), hadDefault: Boolean, kwOnly: Boolean): (Seq[Param], Seq[Param], KWOnlyParams) = {
-        val (posOnlyParams, accumParams, kwParams) = accum
+      @tailrec def impl(accum: Params, hadDefault: Boolean, kwOnly: Boolean): Params = {
         val pos = tokens.currentOffset
         tokens.peek match {
           case Operator("**") =>
             tokens.next()
             val p = param_no_default(tokens)
-            if (kwParams.kwParam.nonEmpty) {
+            if (accum.kwParam.nonEmpty) {
               throw Parser.Error("a ** parameter was already specified", pos)
             }
             if (tokens.peek == Comma)
               tokens.next()
-            (posOnlyParams, accumParams, kwParams.copy(kwParam = Some(p)))
+            accum.withKwParam(p)
           case Operator("/") =>
-            if (posOnlyParams.nonEmpty || kwParams.nonEmpty || hadDefault) {
+            if (accum.hasKws) {
               throw Parser.Error("Unexpected /", tokens.currentOffset)
             }
             tokens.next()
             if (tokens.peek == Comma)
               tokens.next()
-            impl((accumParams, Seq.empty, kwParams), hadDefault, kwOnly)
+            impl(accum.toPosOnly, hadDefault, kwOnly)
           case Operator("*") =>
             tokens.next()
             tokens.peek match {
@@ -454,13 +453,13 @@ object Parser {
                 tokens.next()
                 impl(accum, hadDefault, kwOnly = true)
               case _ =>
-                if (kwParams.vararg.nonEmpty) {
+                if (accum.varArg.nonEmpty) {
                   throw Parser.Error("Invalid syntax", tokens.currentOffset)
                 }
                 val p = param_no_default(tokens)
                 if (tokens.peek == Comma)
                   tokens.next()
-                impl((posOnlyParams, accumParams, kwParams.copy(vararg = Some(p))), false, kwOnly = true)
+                impl(accum.withVarArg(p), false, kwOnly = true)
             }
           case RParen => accum
           case _ =>
@@ -469,9 +468,9 @@ object Parser {
               throw Parser.Error("a required parameter can't follow a default or keyword parameter", pos)
             }
             val next = if (kwOnly)
-              (posOnlyParams, accumParams, kwParams.copy(kwOnlyParams = kwParams.kwOnlyParams :+ nextParam))
+              accum.withKwOnlyParam(nextParam)
             else
-              (posOnlyParams, accumParams :+ nextParam, kwParams)
+              accum.withParam(nextParam)
 
             if (tokens.peek == Comma)
               tokens.next()
@@ -480,8 +479,8 @@ object Parser {
         }
 
       }
-      val (posOnly, posArgs, kwArgs) = impl((Seq.empty, Seq.empty, KWOnlyParams(None, Seq.empty, None)), false, false)
-      Arguments.fromParams(posOnly, posArgs, Option(kwArgs).filter(_.nonEmpty))
+      val params = impl(Params.empty, false, false)
+      Arguments.fromParams(params)
     }
 
     def param_maybe_default(tokens: Lexer): Param = {

@@ -17,7 +17,7 @@ class QuoteTest extends AnyFreeSpec with Matchers {
           """
       ast.shouldEqual(Module(Seq(FunctionDef(
         Name("foo"),
-        Arguments(Nil, Seq(Arg(Name("bar"), Some(Name("Thing")), None)), None, Nil, Nil, None, Seq(Constant(StringLiteral("baz", "\"", None)))),
+        Arguments(Nil, Seq(Arg(Name("bar"), Some(Name("Thing")), None)), None, Nil, Nil, None, Seq(Constant(StringLiteral("baz", None)))),
         Seq(Return(Some(Name("something")))),
         Nil,
         None,
@@ -34,10 +34,25 @@ class QuoteTest extends AnyFreeSpec with Matchers {
   "pyq" - {
     "works when values can be quoted" in {
       val xxxxx = 10
-      val yyy = "hi"
-      pyq"a = $xxxxx; b = $yyy"
+      val yyy = "hi I'm ted"
+      val quotedTree = pyq"a = $xxxxx; b = $yyy"
+      val names = quotedTree.symbols.keys.toSeq.sortBy(_.name)
+      val xName = names.head
+      val yName = names(1)
+      val tree = quotedTree.doQuoted()
+      tree shouldEqual Module(Seq(
+        Assign(Seq(xName), Constant(IntegerLiteral(xxxxx)), None),
+        Assign(Seq(yName), Constant(StringLiteral(yyy)), None),
+        Assign(Seq(Name("a")), xName, None),
+        Assign(Seq(Name("b")), yName, None)
+      ))
+
+      tree.pretty shouldEqual
+        s"""${xName.pretty} = 10
+           |${yName.pretty} = 'hi I\\'m ted'
+           |a = ${xName.pretty}
+           |b = ${yName.pretty}""".stripMargin
+
     }
-
-
   }
 }

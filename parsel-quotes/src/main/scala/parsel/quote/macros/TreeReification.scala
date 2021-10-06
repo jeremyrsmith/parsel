@@ -8,13 +8,13 @@ import scala.reflect.macros.whitebox
 abstract class TreeReification(val c: whitebox.Context) {
   import c.universe.{Assign => _, Return => _, Constant => _, Literal => _, Try => _, If => _, Import => _, ClassDef => _, Tree => ScalaTree, Expr => ScalaExpr, _}
 
-  def reifyTree(c: whitebox.Context)(tree: Tree): ScalaTree = {
+  def reifyTree(tree: Tree): ScalaTree = {
     tree match {
       case Pass() => q"_root_.parsel.ast.Pass()"
       case Break() => q"_root_.parsel.ast.Break()"
       case Continue() => q"_root_.parsel.ast.Continue()"
       case Name(name) => q"_root_.parsel.ast.Name($name)"
-      case Constant(value) => q"_root_.parsel.ast.Constant(${reifyLiteral(c)(value)})"
+      case Constant(value) => q"_root_.parsel.ast.Constant(${reifyLiteral(value)})"
       case Module(body) => q"_root_.parsel.ast.Module(${seq(body)})"
       case Interactive(body) => q"_root_.parsel.ast.Interactive(${seq(body)})"
       case Expression(expr) => q"_root_.parsel.ast.Expression(${r(expr)})"
@@ -76,13 +76,13 @@ abstract class TreeReification(val c: whitebox.Context) {
   }
 
 
-  private def r(tree: Tree): ScalaTree = reifyTree(c)(tree)
+  private def r(tree: Tree): ScalaTree = reifyTree(tree)
   private def opt(tree: Option[Tree]): ScalaTree = tree match {
     case Some(tree) => q"_root_.scala.Some(${r(tree)})"
     case None => q"_root_.scala.None"
   }
   private def seqTrees(trees: Seq[ScalaTree]): ScalaTree = q"Seq(..$trees)"
-  private def seq(trees: Seq[Tree]): ScalaTree = seqTrees(trees.map(reifyTree(c)))
+  private def seq(trees: Seq[Tree]): ScalaTree = seqTrees(trees.map(tree => reifyTree(tree)))
   private def seqOpt(trees: Seq[Option[Tree]]): ScalaTree = seqTrees(trees.map(t => opt(t)))
   private def compareOps(ops: Seq[ComparisonOperator]): ScalaTree = seqTrees {
     ops.map {
@@ -134,13 +134,12 @@ abstract class TreeReification(val c: whitebox.Context) {
     case USub   => reify(USub)
   }
 
-  private def reifyLiteral[A](c: whitebox.Context)(literal: Literal[A]): ScalaTree =
+  private def reifyLiteral[A](literal: Literal[A]): ScalaTree =
     literal match {
       case StringLiteral(value, flags) => q"_root_.parsel.ast.StringLiteral($value, $flags)"
       case BytesLiteral(value, flags) => q"_root_.parsel.ast.BytesLiteral($value, $flags)"
       case BooleanLiteral(value) => q"_root_.parsel.ast.BooleanLiteral($value)"
       case NoneLiteral => q"_root_.parsel.ast.NoneLiteral"
-      case LongLiteral(value) => q"_root_.parsel.ast.LongLiteral(_root_.scala.math.BigInt(${value.toString()}))"
       case IntegerLiteral(value) => q"_root_.parsel.ast.IntegerLiteral(_root_.scala.math.BigInt(${value.toString()}))"
       case FloatLiteral(value) => q"_root_.parsel.ast.FloatLiteral(_root_.scala.math.BigDecimal(${value.toString()}))"
       case ImaginaryLiteral(value) => q"_root_.parsel.ast.ImaginaryLiteral(_root_.scala.math.BigDecimal(${value.toString()}))"
