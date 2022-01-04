@@ -5,18 +5,29 @@ import parsel.parse.Lexer.Token
 
 import scala.annotation.tailrec
 import scala.reflect.ClassTag
+import scala.util.control.NonFatal
 
 class Lexer(val input: String, ignoreWhitespace: Boolean = true, start: Int = 0, isQuotedExpr: Boolean = false) extends Iterator[Token] {
   import Lexer._
   private var offset = start
   private var stack: List[State] = Root :: Nil
   if (isQuotedExpr)
-    stack = InBraceExpr :: stack
+    stack = InFormattedString :: stack
+
+  private var _ignoreWhitespace: Boolean = ignoreWhitespace
+
+  def ignoringWhitespace[A](fn: => A): A = {
+    _ignoreWhitespace = true
+    val result = fn
+    _ignoreWhitespace = ignoreWhitespace
+    result
+  }
+
   // TODO: lookahead memo buffer - if we fill/drain a lookahead buffer, we could avoid re-lexing a lot of stuff on peeks
 
   override def hasNext: Boolean = offset <= input.length
 
-  @tailrec private def peekNext(offset: Int = this.offset, stack: List[State] = this.stack, skipWs: Boolean = ignoreWhitespace): (Token, Int, List[State]) =
+  @tailrec private def peekNext(offset: Int = this.offset, stack: List[State] = this.stack, skipWs: Boolean = _ignoreWhitespace): (Token, Int, List[State]) =
     if (offset >= input.length)
       (EOF, input.length, End :: Nil)
     else stack match {
@@ -40,7 +51,7 @@ class Lexer(val input: String, ignoreWhitespace: Boolean = true, start: Int = 0,
         case h :: t =>
           val (nextTok, nextOffs, nextStack) = h.matchNext(input, offset, stack)
           nextTok match {
-            case Whitespace if ignoreWhitespace => peekNextN(n, toks, nextOffs, nextStack)
+            case Whitespace if _ignoreWhitespace => peekNextN(n, toks, nextOffs, nextStack)
             case other => peekNextN(n - 1, toks :+ other, nextOffs, nextStack)
           }
       }
@@ -60,9 +71,9 @@ class Lexer(val input: String, ignoreWhitespace: Boolean = true, start: Int = 0,
       case h :: t =>
         val (nextTok, nextOffs, nextStack) = h.matchNext(input, offset, stack)
         nextStack match {
-          case (Root | End) :: _ if h == InLine && (nextTok != Whitespace || !ignoreWhitespace) && (nextTok != Newline) => accum :+ nextTok
+          case (Root | End) :: _ if h == InLine && (nextTok != Whitespace || !_ignoreWhitespace) && (nextTok != Newline) => accum :+ nextTok
           case (Root | End) :: _ => accum
-          case InLine :: _ if (h == Root || h == InLine) && (nextTok != Whitespace || !ignoreWhitespace) =>
+          case InLine :: _ if (h == Root || h == InLine) && (nextTok != Whitespace || !_ignoreWhitespace) =>
             impl(accum :+ nextTok, nextOffs, nextStack)
           case _ => impl(accum, nextOffs, nextStack)
         }
@@ -150,7 +161,7 @@ class Lexer(val input: String, ignoreWhitespace: Boolean = true, start: Int = 0,
   }
 
   override def next(): Token = {
-    if (ignoreWhitespace) {
+    if (_ignoreWhitespace) {
       skipWhitespace()
     }
     if (offset >= input.length) {
@@ -184,7 +195,7 @@ object Lexer {
   }
 
   private def isOperatorChar(char: Char): Boolean = char match {
-    case '+' | '-' | '*' | '/' | '%' | '^' | '&' | '|' | '=' | '!' | '@' | '>' | '<' => true
+    case '+' | '-' | '*' | '/' | '%' | '^' | '&' | '|' | '=' | '!' | '@' | '>' | '<' | '~' => true
     case _ => false
   }
 
@@ -253,12 +264,12 @@ object Lexer {
           (FloatNum(dec, str.substring(offset, nextOffs1)), nextOffs1, stack)
         }
       case '.' => (Dot, offset + 1, stack)
-      case ':' if str.length > offset && str.charAt(offset + 1) == '=' => (ColonEquals, offset + 1, stack)
+      case ':' if str.length > offset && str.charAt(offset + 1) == '=' => (ColonEquals, offset + 2, stack)
       case ':' => (Colon, offset + 1, stack)
       case ';' => (Semicolon, offset + 1, stack)
       case '\\' if expectChar(str, offset + 1) == '\n' =>
         (Whitespace, offset + 2, stack)
-      case '0' if str.length > offset + 2 =>
+      case '0' if str.length > offset + 2 && !(".EeJj".contains(str.charAt(offset + 1))) =>
         str.charAt(offset + 1) match {
           case 'o' | 'O' =>
             val (digits, nextOffs) = getDigits(str, offset + 2, '7')
@@ -275,29 +286,42 @@ object Lexer {
             (IntegerNum(BigInt(0), str.substring(offset, offset + 1)), offset + 1, stack)
         }
       case c if c.isDigit =>
-        def part(offs: Int, char: Char): (Boolean, Int) = if (offs == -1)
+        def part(offs: Int, char: Char, allowSign: Boolean = false): (Boolean, Int) = if (offs == -1)
           (false, str.length)
         else if (str.length > offs && str.charAt(offs).toUpper == char) {
           var nextOffs = offs + 1
+          if (str.length > nextOffs && allowSign && "+-".contains(str.charAt(nextOffs)))
+            nextOffs += 1
           while (str.length > nextOffs && str.charAt(nextOffs).isDigit) {
             nextOffs += 1
           }
           (true, nextOffs)
         } else (false, offs)
 
-        val nextOffs = str.indexWhere(!_.isDigit, offset)
+        val nextOffs = str.indexWhere(!_.isDigit, offset) match {
+          case -1 => str.length
+          case n  => n
+        }
         val (fracPart, nextOffs1) = part(nextOffs, '.')
-        val (expPart, nextOffs2) = part(nextOffs1, 'E')
+        val (expPart, endOffs) = part(nextOffs1, 'E', allowSign = true)
 
-        val syntax = str.substring(offset, nextOffs2)
+        val syntax = str.substring(offset, endOffs)
 
-        if (str.length > nextOffs2 && str.charAt(nextOffs2).toLower == 'j') {
-          (ImagNum(BigDecimal(syntax), str.substring(offset, nextOffs2 + 1)), nextOffs2 + 1, stack)
+        def dec = try BigDecimal(syntax) catch {
+          case NonFatal(err) => parseError(s"Unable to parse decimal literal '$syntax'", offset)
+        }
+
+        def int = try BigInt(syntax) catch {
+          case NonFatal(err) => parseError(s"Unable to parse integer literal '$syntax'", offset)
+        }
+
+        if (str.length > endOffs && str.charAt(endOffs).toLower == 'j') {
+          (ImagNum(dec, str.substring(offset, endOffs + 1)), endOffs + 1, stack)
         } else {
           if (fracPart || expPart) {
-            (FloatNum(BigDecimal(syntax), syntax), nextOffs2, stack)
+            (FloatNum(dec, syntax), endOffs, stack)
           } else {
-            (IntegerNum(BigInt(syntax), syntax), nextOffs2, stack)
+            (IntegerNum(int, syntax), endOffs, stack)
           }
         }
       case '=' =>
@@ -386,7 +410,17 @@ object Lexer {
         case other =>
           @tailrec def findClosing(idx: Int): Int = str.indexOf(quoteChar, idx) match {
             case -1 => parseError(s"missing closing $quoteChar", start)
-            case next if str.charAt(next - 1) == '\\' => findClosing(next + 1)
+            case next if str.charAt(next - 1) == '\\' =>
+              var numSlashes = 1
+              var pos = next - 2
+              while (pos > offset && str.charAt(pos) == '\\') {
+                numSlashes += 1
+                pos -= 1
+              }
+              if (numSlashes % 2 == 1)
+                findClosing(next + 1)
+              else
+                next
             case next => next
           }
           val closingPos = findClosing(offset)
@@ -422,20 +456,35 @@ object Lexer {
     }
   }
 
-  private case object InBraceExpr extends State {
+  private case object InFormattedString extends State {
     override def matchNext(str: String, offset: Int, stack: List[State]): (Token, Int, List[State]) = {
       str.charAt(offset) match {
-        case '}' => (RBrace, offset + 1, stack)
-        case '{' => (LBrace, offset + 1, stack)
+        case '{' if str.length > offset + 1 && str.charAt(offset + 1) == '{' => takeWord(str, offset + 2, stack, "{")
+        case '{' => (LBrace, offset + 1, InFormattedValue :: stack)
         case _ => takeWord(str, offset, stack)
       }
     }
 
-    def takeWord(str: String, offset: Int, stack: List[State]): (Token, Int, List[State]) = {
+    def takeWord(str: String, offset: Int, stack: List[State], prepend: String = ""): (Token, Int, List[State]) = {
       var nextOffset = offset + 1
-      while (nextOffset < str.length && str.charAt(nextOffset) != '{' && str.charAt(nextOffset) != '}')
+      while (nextOffset < str.length && str.charAt(nextOffset) != '{')
         nextOffset += 1
-      (Word(str.substring(offset, nextOffset)), nextOffset, stack)
+      (Word(prepend + str.substring(offset, nextOffset)), nextOffset, stack)
+    }
+  }
+
+  private case object InFormattedValue extends State {
+    override def matchNext(str: String, offset: Int, stack: List[State]): (Token, Int, List[State]) = {
+      if (offset < str.length) {
+        str.charAt(offset) match {
+          case '\n' if offset > 0 && str.charAt(offset - 1) == '\\' => (Whitespace, offset + 1, stack)
+          case '\n' => (Newline, offset + 1, stack.tail)
+          case '}' => (RBrace, offset + 1, stack.tail)
+          case c@(']' | ')') =>
+            throw Parser.Error(s"unexpected '$c'", offset)
+          case c => matchInLine(str, offset, stack, Newline)
+        }
+      } else (EOF, str.length, End :: Nil)
     }
   }
 

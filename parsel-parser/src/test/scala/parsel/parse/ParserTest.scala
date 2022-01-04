@@ -2,11 +2,12 @@ package parsel.parse
 
 import org.scalatest.freespec.AnyFreeSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatestplus.scalacheck.Checkers
 import parsel.ast._
 
 import java.io.File
 
-class ParserTest extends AnyFreeSpec with Matchers {
+class ParserTest extends AnyFreeSpec with Matchers with Checkers {
 
   "assignments" in {
     Parser.parse(
@@ -70,5 +71,15 @@ class ParserTest extends AnyFreeSpec with Matchers {
         }
       }
   }
+
+//  "check generated trees" in {
+//    import org.scalacheck.ScalacheckShapeless._
+//    check {
+//      (module: Module) =>
+//        val printed = module.pretty
+//        val parsed = Parser.parse(printed)
+//        parsed == module
+//    }
+//  }
 
 }

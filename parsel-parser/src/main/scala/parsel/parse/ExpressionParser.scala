@@ -3,6 +3,7 @@ package parse
 
 import ast._
 import parsel.ast.Util.{Param, Params}
+import parsel.parse.Parser.Error
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
@@ -14,9 +15,38 @@ object ExpressionParser {
 
   def parse(input: String): Expr = parse(new Lexer(input, ignoreWhitespace = true), input)
 
-  def parse(lexer: Lexer, input: String): Expr = Parser.parse(lexer, input) match {
-    case Module(Seq(ExprStatement(expr))) => expr
-    case _ => throw new RuntimeException(s"Input ${input} was not a single expression")
+  def parse(lexer: Lexer, input: String): Expr = {
+    lexer.skip(Indent)
+    try {
+      val expr = expression(lexer)
+      while(lexer.hasNext && lexer.isEmptyLine) {
+        lexer.skipLine()
+      }
+      if (lexer.nonEmpty && lexer.peek != EOF) {
+        throw new Exception("parser stopped early!")
+      }
+      expr
+    } catch {
+      case err@Error(msg, offset) =>
+        val nextNewline = input.indexOf('\n', offset) match {
+          case -1 => input.length
+          case n => n
+        }
+        var lineNumber = 1
+        var lastLineOffset = 0
+        var i = 0
+        while (i < offset) {
+          if (input.charAt(i) == '\n') {
+            lineNumber += 1
+            lastLineOffset = i
+          }
+          i += 1
+        }
+        val column = offset - lastLineOffset
+        val detailErr = ParseError(msg, offset, lineNumber, column, input.substring(lastLineOffset, nextNewline))
+        detailErr.setStackTrace(err.getStackTrace)
+        throw detailErr
+    }
   }
 
   def star_expressions(tokens: Lexer): Seq[Expr] = {
@@ -175,7 +205,7 @@ object ExpressionParser {
     val next = inversion(tokens)
 
     def isAnd = tokens.peek match {
-      case Keyword("and") | Operator("&&") => true
+      case Keyword("and") => true
       case _ => false
     }
 
@@ -369,33 +399,26 @@ object ExpressionParser {
   }
 
   private object StringFlags {
-    def unapply(str: String): Option[String] = str match {
-      case "r" | "u" | "R" | "U" | "f" | "F" | "fr" | "Fr" | "fR" | "FR" | "rf" | "rF" | "Rf" | "RF" => Some(str)
-      case _ => None
+    def unapply(str: String): Boolean = str match {
+      case "r" | "u" | "R" | "U" | "f" | "F" | "fr" | "Fr" | "fR" | "FR" | "rf" | "rF" | "Rf" | "RF" => true
+      case _ => false
     }
   }
 
   private object ByteFlags {
-    def unapply(str: String): Option[String] = str match {
-      case "b" | "B" | "br" | "Br" | "bR" | "BR" | "rb" | "rB" | "Rb" | "RB" => Some(str)
-      case _ => None
+    def unapply(str: String): Boolean = str match {
+      case "b" | "B" | "br" | "Br" | "bR" | "BR" | "rb" | "rB" | "Rb" | "RB" => true
+      case _ => false
     }
   }
 
   private def stringOrIdent(tokens: Lexer, word: String): Expr = word match {
-    case StringFlags(flags) =>
+    case StringFlags() | ByteFlags() =>
       tokens.peek match {
         case q@Quote(_) =>
           tokens.next()
-          strings(tokens, q, Some(flags))
-        case _ => Name(flags)
-      }
-    case ByteFlags(flags) =>
-      tokens.peek match {
-        case q@Quote(_) =>
-          tokens.next()
-          strings(tokens, q, Some(flags))
-        case _ => Name(flags)
+          strings(tokens, q, Some(word))
+        case _ => Name(word)
       }
     case ident => primary1(tokens, Name(ident))
   }
@@ -407,11 +430,7 @@ object ExpressionParser {
       // Find the end of this string literal, and see if there's another one after it
       val startPos = tokens.currentOffset
       def nextStart = tokens.peekN(2) match {
-        case Seq(Word(StringFlags(flags)), Quote(_)) =>
-          tokens.next()
-          val nextDelim = tokens.expect(Quote)
-          Some((nextDelim, Some(flags)))
-        case Seq(Word(StringFlags(flags)), Quote(_)) =>
+        case Seq(Word(flags@(StringFlags() | ByteFlags())), Quote(_)) =>
           tokens.next()
           val nextDelim = tokens.expect(Quote)
           Some((nextDelim, Some(flags)))
@@ -433,13 +452,15 @@ object ExpressionParser {
       }
 
       def combine(next: Either[JoinedStr, Constant[String]]): Either[JoinedStr, Constant[String]] = (accum, next) match {
+        case (accum, Right(Constant(StringLiteral("", _) | BytesLiteral("", _)))) => accum
         case (Right(Constant(StringLiteral(value1, flags))), Right(Constant(StringLiteral(value2, _)))) =>
           Right(Constant(StringLiteral(value1 + value2, flags)))
         case (Right(Constant(BytesLiteral(value1, flags))), Right(Constant(BytesLiteral(value2, _)))) =>
           Right(Constant(BytesLiteral(value1 + value2, flags)))
         case (Right(_), Right(_)) |
              (Left(_), Right(Constant(BytesLiteral(_, _)))) |
-             (Right(Constant(BytesLiteral(_, _))), Left(_)) => throw Parser.Error("cannot mix bytes and nonbytes literals", startPos)
+             (Right(Constant(BytesLiteral(_, _))), Left(_)) =>
+          throw Parser.Error("cannot mix bytes and nonbytes literals", startPos)
         case (Left(joinedStr), Right(c)) =>
           Left(JoinedStr(collapseJoined(joinedStr.values, Seq(c).filterNot(_.value.value.isEmpty))))
         case (Right(c), Left(joinedStr)) => Left(JoinedStr(collapseJoined(Seq(c).filterNot(_.value.value.isEmpty), joinedStr.values)))
@@ -453,8 +474,11 @@ object ExpressionParser {
             case Some((nextDelim, nextFlags)) =>
               val expr = if (flags.exists(_.toLowerCase.contains("f")))
                 Left(JoinedStr(Nil))
-              else
-                Right(Constant(StringLiteral("", flags)))
+              else nextFlags match {
+                case Some(flags@ByteFlags()) => Right(Constant(BytesLiteral("", flags)))
+                case _ => Right(Constant(StringLiteral("", flags)))
+              }
+
               impl(nextDelim, nextFlags, combine(expr))
             case None => accum.fold[Expr](identity, identity)
           }
@@ -468,54 +492,13 @@ object ExpressionParser {
         case tok => throw Parser.Error(s"Unexpected token '${tok.value}'", tokens.currentOffset)
       }
     }
-    impl(Delim, flags, Right(Constant(StringLiteral("", flags))))
+    val start = flags match {
+      case Some(flags@ByteFlags()) => Right(Constant(BytesLiteral("", flags)))
+      case Some(flags@StringFlags()) if flags.toLowerCase.contains("f") => Left(JoinedStr(Nil))
+      case _ => Right(Constant(StringLiteral("", flags)))
+    }
+    impl(Delim, flags, start)
   }
-//
-//  @tailrec private def strings(tokens: Lexer, Delim: Quote, flags: Option[Either[String, String]], accum: Seq[Literal[String]]): Literal[String] = {
-//    // we're inside a string which started with Delim and flags (byte flags on the left, string flags on the right).
-//    // We've previously seen accum string literals.
-//    // Find the end of this string literal, and see if there's another one after it
-//
-//    def nextStart = tokens.peekN(2) match {
-//      case Seq(Word(StringFlags(flags)), Quote(_)) =>
-//        tokens.next()
-//        val nextDelim = tokens.expect(Quote)
-//        Some((nextDelim, Some(Right(flags))))
-//      case Seq(Word(StringFlags(flags)), Quote(_)) =>
-//        tokens.next()
-//        val nextDelim = tokens.expect(Quote)
-//        Some((nextDelim, Some(Left(flags))))
-//      case Seq(Quote(_), _) =>
-//        val nextDelim = tokens.expect(Quote)
-//        Some((nextDelim, None))
-//      case _ =>
-//        None
-//    }
-//
-//    def mkNext(content: String): Literal[String] = flags match {
-//      case Some(Left(byteFlags)) => BytesLiteral(content, Delim.value, byteFlags)
-//      case Some(Right(stringFlags)) => StringLiteral(content, Delim.value, Some(stringFlags))
-//      case None => StringLiteral(content, Delim.value, None)
-//    }
-//
-//    def end(accum: Seq[Literal[String]]) = if (accum.size > 1) StringLiterals(accum) else accum.head
-//
-//    tokens.next() match {
-//      case Delim =>
-//        // it ended without any content
-//        nextStart match {
-//          case Some((nextDelim, nextFlags)) => strings(tokens, nextDelim, nextFlags, accum :+ mkNext(""))
-//          case None => end(accum :+ mkNext(""))
-//        }
-//      case Word(str) =>
-//        tokens.expect(Delim)
-//        nextStart match {
-//          case Some((nextDelim, nextFlags)) => strings(tokens, nextDelim, nextFlags, accum :+ mkNext(str))
-//          case None => end(accum :+ mkNext(str))
-//        }
-//      case tok => throw Parser.Error(s"Unexpected token '${tok.value}'", tokens.currentOffset)
-//    }
-//  }
 
   def primary(tokens: Lexer): Expr = primary1(tokens, atom(tokens))
 
@@ -551,16 +534,24 @@ object ExpressionParser {
   private def slice(tokens: Lexer): Slice = {
     def parseUpper(lower: Option[Expr]): Slice = tokens.peek match {
       case RBracket | Comma => Slice(lower, None, None)
-      case Colon            => tokens.next(); parseStep(lower, None)
-      case _                =>
-        val upper = expression(tokens)
-        parseStep(lower, Some(upper))
+      case _            =>
+        tokens.expect(Colon);
+        tokens.peek match {
+          case RBracket | Comma => Slice(lower, None, None)
+          case Colon =>
+            tokens.next()
+            tokens.skip(Colon)
+            parseStep(lower, None)
+          case _ =>
+            val upper = expression(tokens)
+            tokens.skip(Colon)
+            parseStep(lower, Some(upper))
+        }
     }
 
     def parseStep(lower: Option[Expr], upper: Option[Expr]): Slice = tokens.peek match {
       case RBracket | Comma => Slice(lower, upper, None)
-      case Colon            => tokens.next(); Slice(lower, upper, None)
-      case _                => Slice(lower, upper, Some(expression(tokens)))
+      case _ => Slice(lower, upper, Some(expression(tokens)))
     }
 
     tokens.peek match {
@@ -613,7 +604,7 @@ object ExpressionParser {
           val loc = tokens.currentOffset
           val first = star_named_expression(tokens)
           tokens.peek match {
-            case Keyword("for") =>
+            case Keyword("for" | "async") =>
               if (first.isInstanceOf[Starred])
                 throw Parser.Error("iterable unpacking cannot be used in comprehension", loc)
               genexpFrom(tokens, first)
@@ -652,7 +643,7 @@ object ExpressionParser {
       val loc = tokens.currentOffset
       val first = star_named_expression(tokens)
       val result = tokens.peek match {
-        case Keyword("for") =>
+        case Keyword("for" | "async") =>
           if (first.isInstanceOf[Starred]) {
             throw Parser.Error("iterable unpacking cannot be used in comprehension", loc)
           }
@@ -705,7 +696,7 @@ object ExpressionParser {
             tokens.next()
             val firstValue = expression(tokens)
             tokens.peek match {
-              case Keyword("for") => // dict comp
+              case Keyword("for" | "async") => // dict comp
                 val comps = for_if_clauses(tokens)
                 DictComp(first, firstValue, comps)
               case Comma =>
@@ -725,7 +716,7 @@ object ExpressionParser {
             }
             ConstructSet(items.toSeq)
 
-          case Keyword("for") => // a set comprehension
+          case Keyword("for" | "async") => // a set comprehension
             val comps = for_if_clauses(tokens)
             if (first.isInstanceOf[Starred]) {
               throw Parser.Error("iterable unpacking cannot be used in comprehension", loc)
@@ -770,7 +761,7 @@ object ExpressionParser {
     val result = tokens.peek match {
       case RParen =>
         Left((Nil, Nil))
-      case Operator("*") =>
+      case Operator("*") | Operator("**") =>
         // must be args, genexp doesn't allow this
         Left(args_inner(tokens, (Seq.empty, Seq.empty)))
       case _ =>
@@ -850,7 +841,7 @@ object ExpressionParser {
 
   def for_if_clauses(tokens: Lexer): Seq[Comprehension] = {
     val results = ArrayBuffer(for_if_clause(tokens))
-    while (tokens.peek == Keyword("for")) {
+    while (tokens.peek == Keyword("for") || tokens.peek == Keyword("async")) {
       results += for_if_clause(tokens)
     }
     results.toSeq

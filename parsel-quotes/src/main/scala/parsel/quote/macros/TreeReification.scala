@@ -16,8 +16,6 @@ abstract class TreeReification(val c: whitebox.Context) {
       case Name(name) => q"_root_.parsel.ast.Name($name)"
       case Constant(value) => q"_root_.parsel.ast.Constant(${reifyLiteral(value)})"
       case Module(body) => q"_root_.parsel.ast.Module(${seq(body)})"
-      case Interactive(body) => q"_root_.parsel.ast.Interactive(${seq(body)})"
-      case Expression(expr) => q"_root_.parsel.ast.Expression(${r(expr)})"
       case Return(value) => q"_root_.parsel.ast.Return(${opt(value)})"
       case Raise(exc, cause) => q"_root_.parsel.ast.Raise(${opt(exc)}, ${opt(cause)})"
       case Dict(keys, values) => q"_root_.parsel.ast.Dict(${seq(keys)}, ${seq(values)})"

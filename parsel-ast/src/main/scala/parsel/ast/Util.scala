@@ -41,4 +41,5 @@ object Util {
     val empty: Params = Params(Seq.empty, Seq.empty, None, Seq.empty, None)
   }
 
+  def normalizeFlags(flags: String): String = flags.toLowerCase.replace("r", "")
 }

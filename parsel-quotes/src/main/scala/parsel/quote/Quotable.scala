@@ -22,10 +22,10 @@ object Quotable {
 }
 
 case class QuotedTree(
-  tree: Tree,
+  tree: CompleteTree,
   symbols: Map[Name, QuotedValue[_]]
 ) {
-  def doQuoted(): Tree = {
+  def doQuoted(): CompleteTree = {
     val transformer = new TreeTransformer {
       override def transformModule(module: Module): Module = super.transformModule(module) match {
         case Module(stats) =>
@@ -41,7 +41,7 @@ case class QuotedTree(
         case expr => super.transformExpr(expr)
       }
     }
-    transformer.transform(tree)
+    transformer.transformComplete(tree)
   }
 }
 

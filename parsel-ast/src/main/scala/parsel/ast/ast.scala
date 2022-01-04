@@ -1,8 +1,12 @@
 package parsel.ast
 
+import parsel.ast.Util.normalizeFlags
+
 sealed trait Tree extends Product with Serializable {
   def pretty: String
 }
+
+sealed trait CompleteTree extends Tree
 
 object Tree {
   def formatBlock(stats: Seq[Statement], prefix: String, indent: String): String = stats.map(_.pretty(prefix + indent, indent)).mkString("\n")
@@ -14,22 +18,13 @@ object Tree {
 }
 
 
-final case class Module(body: Seq[Statement]) extends Tree {
+final case class Module(body: Seq[Statement]) extends CompleteTree {
   def pretty(indent: String): String = body.map(_.pretty("", indent)).mkString("\n")
   override def pretty: String = pretty("    ")
 
 }
 
-final case class Interactive(body: Seq[Statement]) extends Tree {
-  override def pretty: String = pretty("    ")
-  def pretty(indent: String): String = body.map(_.pretty("", indent)).mkString("\n")
-}
-
-final case class Expression(body: Expr) extends Tree {
-  override def pretty: String = body.pretty
-}
-
-sealed trait Statement extends Tree {
+sealed trait Statement extends CompleteTree {
   def pretty(prefix: String, indent: String): String
   def pretty(prefix: String): String = pretty(prefix, "    ")
   override def pretty: String = pretty("")
@@ -187,7 +182,7 @@ final case class Continue() extends Statement {
   override def pretty(prefix: String, indent: String): String = prefix + "continue"
 }
 
-sealed trait Expr extends Tree {
+sealed trait Expr extends CompleteTree {
   private[parsel] final def withExprContext(ctx: ExprContext): Expr = {
     val exprTransformer = new ExprTransformer {
       override def transformExprContext(ctxOld: ExprContext): ExprContext = ctx
@@ -201,11 +196,11 @@ final case class Name(name: String) extends Expr {
 }
 
 final case class BoolOp(op: BoolOperator, values: Seq[Expr]) extends Expr {
-  override def pretty: String = values.map(_.pretty).mkString(s" ${op.pretty} ")
+  override def pretty: String = "(" + values.map(_.pretty).mkString(s" ${op.pretty} ") + ")"
 }
 
 final case class NamedExpr(target: Expr, value: Expr) extends Expr {
-  override def pretty: String = s"${target.pretty} := ${value.pretty}"
+  override def pretty: String = s"(${target.pretty} := ${value.pretty})"
 }
 
 final case class BinOp(left: Expr, op: Operator, right: Expr) extends Expr {
@@ -213,62 +208,60 @@ final case class BinOp(left: Expr, op: Operator, right: Expr) extends Expr {
 }
 
 final case class UnaryOp(op: UnaryOperator, operand: Expr) extends Expr {
-  override def pretty: String = s"${op.pretty}${operand.pretty}"
+  override def pretty: String = s"(${op.pretty}${operand.pretty})"
 }
 
 final case class Lambda(args: Arguments, body: Expr) extends Expr {
-  override def pretty: String = s"lambda ${args.pretty}: ${body.pretty}"
+  override def pretty: String = s"(lambda ${args.pretty}: ${body.pretty})"
 }
 
 final case class IfExp(body: Expr, test: Expr, orElse: Expr) extends Expr {
-  override def pretty: String = s"${body.pretty} if ${test.pretty} else ${orElse.pretty}"
+  override def pretty: String = s"(${body.pretty} if ${test.pretty} else ${orElse.pretty})"
 }
 
 final case class Dict(keys: Seq[Expr], values: Seq[Expr]) extends Expr {
   override def pretty: String = {
-    val kvs = if (keys.isEmpty) "" else {
-      "\n" + keys.zip(values).map {
-        case (k, v) => s"${k.pretty}: ${v.pretty}"
-      }.mkString(",\n  ") + "\n"
-    }
+    val kvs = keys.zip(values).map {
+      case (k, v) => s"${k.pretty}: ${v.pretty}"
+    }.mkString(", ")
+
     s"{${kvs}}"
   }
 }
 
 final case class ConstructSet(elts: Seq[Expr]) extends Expr {
   override def pretty: String = {
-    val values = if (elts.isEmpty) "" else {
-      "\n" + elts.map(_.pretty).mkString(",\n  ") + "\n"
-    }
+    val values = elts.map(_.pretty).mkString(", ")
+
     s"{$values}"
   }
 }
 
 final case class ListComp(elt: Expr, generators: Seq[Comprehension]) extends Expr {
   override def pretty: String = {
-    val gensPretty = generators.map(_.pretty).mkString(" for ")
+    val gensPretty = generators.map(_.pretty).mkString(" ")
     s"[${elt.pretty} $gensPretty]"
   }
 }
 
 final case class SetComp(elt: Expr, generators: Seq[Comprehension]) extends Expr {
   override def pretty: String = {
-    val gensPretty = generators.map(_.pretty).mkString(" for ")
+    val gensPretty = generators.map(_.pretty).mkString(" ")
     s"{${elt.pretty} $gensPretty}"
   }
 }
 
 final case class DictComp(key: Expr, value: Expr, generators: Seq[Comprehension]) extends Expr {
   override def pretty: String = {
-    val gensPretty = generators.map(_.pretty).mkString(" for ")
-    s"${key.pretty}: ${value.pretty} $gensPretty"
+    val gensPretty = generators.map(_.pretty).mkString(" ")
+    s"{${key.pretty}: ${value.pretty} $gensPretty}"
   }
 }
 
 final case class GeneratorExp(elt: Expr, generators: Seq[Comprehension]) extends Expr {
   override def pretty: String = {
-    val gensPretty = generators.map(_.pretty).mkString(" for ")
-    s"${elt.pretty} for $gensPretty"
+    val gensPretty = generators.map(_.pretty).mkString(" ")
+    s"(${elt.pretty} $gensPretty)"
   }
 }
 
@@ -277,11 +270,11 @@ final case class Await(value: Expr) extends Expr {
 }
 
 final case class Yield(value: Option[Expr]) extends Expr {
-  override def pretty: String = (Seq("yield") ++ value.map(_.pretty.toSeq)).mkString(" ")
+  override def pretty: String = "(" + (Seq("yield") ++ value.map(_.pretty.toSeq)).mkString(" ") + ")"
 }
 
 final case class YieldFrom(value: Expr) extends Expr {
-  override def pretty: String = s"yield from ${value.pretty}"
+  override def pretty: String = s"(yield from ${value.pretty})"
 }
 
 final case class Compare(left: Expr, ops: Seq[ComparisonOperator], comparators: Seq[Expr]) extends Expr {
@@ -289,7 +282,7 @@ final case class Compare(left: Expr, ops: Seq[ComparisonOperator], comparators: 
     val opsPretty = ops.zip(comparators).map {
       case (op, expr) => s"${op.pretty} ${expr.pretty}"
     }.mkString(" ")
-    s"${left.pretty} $opsPretty"
+    s"(${left.pretty} $opsPretty)"
   }
 }
 
@@ -316,6 +309,12 @@ final case class FormattedValue(value: Expr, conversion: Option[Int], formatSpec
       }.mkString
     }.getOrElse("")
     s"{${value.pretty}$conversionPretty$formatPretty}"
+  }
+
+  override def equals(that: Any): Boolean = that match {
+    case FormattedValue(`value`, conversion, `formatSpec`) =>
+      (conversion == this.conversion || conversion.isEmpty && this.conversion.contains(-1) || conversion.contains(-1) && this.conversion.isEmpty)
+    case _ => false
   }
 }
 
@@ -387,17 +386,37 @@ final case class StringLiteral(value: String, flags: Option[String] = None) exte
     case 8 => "\\b"
     case 11 => "\\v"
     case 12 => "\\f"
-    case c if Character.isISOControl(c) => s"\\x${Integer.toHexString(c)}"
+    case c if Character.isISOControl(c) => c.toInt.formatted("%#04x")
     case c => Seq(c)
   }
+
   override def pretty: String = {
     "'" + escaped + "'"
+  }
+
+  override def equals(obj: Any): Boolean = obj match {
+    case StringLiteral(value, _) => value == this.value // flags are erased during parsing
+    case _ => false
   }
 }
 
 final case class BytesLiteral(value: String, flags: String) extends Literal[String] {
-  def escaped: String = StringLiteral(value, Some(flags)).escaped
-  override def pretty: String = "b" + StringLiteral(value, Some(flags)).pretty
+  def escaped: String = value.flatMap {
+    case c@('\\' | '\'' | '"') => s"\\$c"
+    case '\t' => "\\t"
+    case '\n' => "\\n"
+    case '\r' => "\\r"
+    case 7 => "\\a"
+    case 8 => "\\b"
+    case 11 => "\\v"
+    case 12 => "\\f"
+    case c => Seq(c)
+  }.replace("0x", "0\\x")
+  override def pretty: String = s"b'${escaped}'"
+  override def equals(obj: Any): Boolean = obj match {
+    case BytesLiteral(value, _) => value == this.value
+    case _ => false
+  }
 }
 
 final case class BooleanLiteral(value: Boolean) extends Literal[Boolean] {
@@ -414,8 +433,29 @@ sealed abstract class NumericLiteral[A <: Number : Numeric] extends Literal[A] {
   override def pretty: String = value.toString
 }
 
-final case class IntegerLiteral(value: BigInt) extends NumericLiteral[BigInt]
-final case class FloatLiteral(value: BigDecimal) extends NumericLiteral[BigDecimal]
+final case class IntegerLiteral(value: BigInt) extends NumericLiteral[BigInt] {
+  override def equals(that: Any): Boolean = that match {
+    case IntegerLiteral(thatValue) => value == thatValue
+    case FloatLiteral(thatValue)   => value == thatValue
+    case _ => false
+  }
+
+  override def pretty: String = value.toString
+}
+
+final case class FloatLiteral(value: BigDecimal) extends NumericLiteral[BigDecimal] {
+  override def equals(that: Any): Boolean = that match {
+    case IntegerLiteral(thatValue) => value == thatValue
+    case FloatLiteral(thatValue)   => value == thatValue
+    case _ => false
+  }
+
+  override def pretty: String = value.scale match {
+    case 0 => value.setScale(1).toString()
+    case _ => value.toString()
+  }
+}
+
 final case class ImaginaryLiteral(value: BigDecimal) extends NumericLiteral[BigDecimal] {
   override def pretty: String = value.toString() + "j"
 }
@@ -438,8 +478,8 @@ object ExprContext {
 
 sealed trait BoolOperator {
   def pretty: String = this match {
-    case And => "&&"
-    case Or  => "||"
+    case And => "and"
+    case Or  => "or"
   }
 }
 case object And extends BoolOperator
@@ -486,7 +526,7 @@ final case class Comprehension(target: Expr, iter: Expr, ifs: Seq[Expr], isAsync
   override def pretty: String = {
     val asyncPretty = if (isAsync > 0) "async " else ""
     val ifsPretty = if (ifs.nonEmpty) " " + ifs.map(e => s"if ${e.pretty}").mkString(" ") else ""
-    s"${asyncPretty}for ${target.pretty} in ${iter.pretty}$ifsPretty"
+    s"${asyncPretty} for ${target.pretty} in ${iter.pretty}$ifsPretty"
   }
 }
 

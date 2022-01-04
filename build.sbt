@@ -7,7 +7,9 @@ ThisBuild / crossScalaVersions := Seq("2.11.12", "2.12.15", "2.13.6")
 
 val commonSettings = Seq(
   libraryDependencies ++= Seq(
-    "org.scalatest" %% "scalatest" % "3.2.9" % "test"
+    "org.scalatest" %% "scalatest" % "3.2.2" % "test",
+    "org.scalatestplus" %% "scalacheck-1-14" % "3.2.2.0" % "test",
+    "com.github.alexarchambault" %% "scalacheck-shapeless_1.14" % "1.2.5" % "test"
   ),
   scalacOptions ++= Seq(
     "-language:experimental.macros"
@@ -15,7 +17,7 @@ val commonSettings = Seq(
 )
 
 val `parsel-ast` = project.settings(commonSettings)
-val `parsel-parser` = project.settings(commonSettings).dependsOn(`parsel-ast`)
+val `parsel-parser` = project.settings(commonSettings).dependsOn(`parsel-ast` % "compile->compile;test->test")
 val `parsel-quotes` = project
   .settings(
     commonSettings ++ Seq(

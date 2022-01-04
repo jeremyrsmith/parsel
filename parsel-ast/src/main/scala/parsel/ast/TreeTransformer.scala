@@ -4,10 +4,14 @@ import parsel.ast.Util.{Param, Params}
 
 trait TreeTransformer extends ExprTransformer {
 
+  def transformComplete(tree: CompleteTree): CompleteTree = tree match {
+    case mod: Module => transformModule(mod)
+    case expr: Expr => transformExpr(expr)
+    case statement: Statement => transformStatement(statement)
+  }
+
   def transform(tree: Tree): Tree = tree match {
     case mod: Module => transformModule(mod)
-    case Interactive(body) => Interactive(transformStatements(body))
-    case Expression(body) => Expression(transformExpr(body))
     case statement: Statement => transformStatement(statement)
     case expr: Expr => transformExpr(expr)
     case comprehension: Comprehension => transformComprehension(comprehension)

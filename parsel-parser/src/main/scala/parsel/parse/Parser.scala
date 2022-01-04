@@ -736,11 +736,16 @@ object Parser {
       val isRaw = flagsLower.contains('r')
       val isBytes = flagsLower.contains('b')
       val isFormatted = flagsLower.contains('f')
-      val lexer = new Lexer(content, ignoreWhitespace = true, isQuotedExpr = true)
+      val lexer = new Lexer(content, ignoreWhitespace = false, isQuotedExpr = true)
+      lexer.skip(Indent)
       if (isFormatted) {
         Left(decodeFormatted(lexer, outerOffset, isRaw))
       } else {
-        Right(Constant(StringLiteral(decodeStringChunk(lexer, outerOffset, isRaw, isBytes, formatted = false), flags)))
+        if (isBytes) {
+          Right(Constant(BytesLiteral(decodeStringChunk(lexer, outerOffset, isRaw, isBytes, formatted = false), flagsLower)))
+        } else {
+          Right(Constant(StringLiteral(decodeStringChunk(lexer, outerOffset, isRaw, isBytes, formatted = false), flags)))
+        }
       }
     }
 
@@ -816,8 +821,12 @@ object Parser {
             }
           case '{' if formatted && (content.length <= pos + 1 || content.charAt(pos + 1) != '{') =>
             (builder.mkString, pos) // stop here, it's a formatted expression
+          case '}' if formatted && (content.length <= pos + 1 || content.charAt(pos + 1) != '}') =>
+            (builder.mkString, pos)
           case '{' if formatted =>
-            impl(pos + 2, builder.append("{{")) // next character must be '{' as well, so continue
+            impl(pos + 2, builder.append("{")) // next character must be '{' as well, so continue
+          case '}' if formatted =>
+            impl(pos + 2, builder.append("}"))
           case c =>
             if (bytes) {
               if (c > 127)
@@ -827,7 +836,7 @@ object Parser {
                 case n  => impl(n, builder.append(content.substring(pos, n)))
               }
             } else if (formatted) {
-              content.indexWhere(c => c == '\\' || c == '{', pos + 1) match {
+              content.indexWhere(c => c == '\\' || c == '{' || c == '}', pos + 1) match {
                 case -1 => (builder.append(content.substring(pos)).mkString, content.length)
                 case n  => impl(n, builder.append(content.substring(pos, n)))
               }
@@ -848,7 +857,7 @@ object Parser {
       val content = lexer.input
       val flags = if (raw) Some("r") else None
 
-      def parseQuotedExpr: Seq[Expr] = {
+      def parseQuotedExpr: Seq[Expr] = lexer.ignoringWhitespace {
         val pos = lexer.currentOffset
         if (lexer.peek == RBrace) {
           // NOTE: The f-string grammar in the lexical doc says this is allowed, but python throws an error.
@@ -930,15 +939,15 @@ object Parser {
         case LBrace =>
           lexer.next()
           impl(pieces ++ parseQuotedExpr)
-        case _ =>
+        case tok =>
           val chunk = decodeStringChunk(lexer, outerOffset, raw, bytes = false, formatted = true)
-          val nextPieces = pieces.lastOption match {
+          val nextPieces = if (chunk.isEmpty) pieces else pieces.lastOption match {
             case Some(Constant(StringLiteral(chunk1, flags1))) =>
               pieces.dropRight(1) :+ Constant(StringLiteral(chunk1 + chunk, None))
             case _ => pieces :+ Constant(StringLiteral(chunk, flags))
           }
 
-          if (!lexer.hasNext || lexer.peek == EOF)
+          if (!lexer.hasNext || lexer.peek == EOF || (chunk.isEmpty && tok == RBrace))
             JoinedStr(nextPieces)
           else
             impl(nextPieces)
