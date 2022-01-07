@@ -1,7 +1,7 @@
 name := "parsel"
 
 ThisBuild / organization := "org.polynote"
-ThisBuild / version := "0.1.0-SNAPSHOT"
+ThisBuild / version := "0.1.0"
 ThisBuild / scalaVersion := "2.11.12"
 ThisBuild / crossScalaVersions := Seq("2.11.12", "2.12.15", "2.13.6")
 
