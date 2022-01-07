@@ -47,7 +47,7 @@ There three flavors of quasiquote, which are accessed by importing `parsel.quote
 * `py` quasiquotes contain Python statements. Quoted expressions are spliced eagerly as expression trees (see `Quotable`
   below), so this type of quasiquote results in a `Module` (which is just a container for a bunch of statements).
 * `pyq` quasiquotes also contain Python statements, but quoted expressions are suspended rather than being spliced
-  eagerly. The idea here is that a [[Quotable]] instance could use side-effects when quoting (e.g. quote a large object
+  eagerly. The idea here is that a `Quotable` instance could use side-effects when quoting (e.g. quote a large object
   or a `DataFrame` by writing it to a URI, and splice the necessary code for reading it in Python) and suspending it
   allows control over when those side effects happen. So this type of quasiquote results in a `QuotedTree`, which
   becomes a usable AST when its `doQuote()` method is called (triggering any side-effects).
