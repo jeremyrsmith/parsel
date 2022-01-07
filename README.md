@@ -95,9 +95,11 @@ val example2Result: Module = example2.doQuote()
 ### `Quotable`
 
 Splicing values is accomplished by the `Quotable` typeclass. Any expression of type `T` that's spliced into a
-quasiquote must have an instance of `Quotable[T]`. This typeclass just has a method `doQuote`, which takes a value
-of type `T` and returns an `Expr` which represents that value. Instances are already defined for obvious constants, but
-I'm not sure how opinionated parsel ought to be about how things like collections and such ought to be quoted.
+quasiquote must have an instance of `Quotable[T]` in implicit scope where the quasiquote interpolater is used. This
+typeclass just has a method `doQuote`, which takes a value of type `T` and returns an `Expr` which represents that
+value. Instances are already defined for obvious constants, but I'm not sure how opinionated parsel ought to be about
+how things like collections and such ought to be quoted, so those aren't currently implemented (I'd be happy to hear
+feedback about this, but that would mean that you're using this library – and you probably shouldn't be).
 
 ## License & Copyright
 Copyright 2022 Jeremy Smith
