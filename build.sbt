@@ -27,5 +27,5 @@ val `parsel-quotes` = project
     )
   )
   .dependsOn(`parsel-parser`)
-val `parsel` = project.in(file(".")).aggregate(`parsel-ast`, `parsel-parser`)
+val `parsel` = project.in(file(".")).aggregate(`parsel-ast`, `parsel-parser`, `parsel-quotes`)
 

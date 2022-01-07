@@ -13,40 +13,72 @@ object ExpressionParser {
 
   val ctx: ExprContext = ExprContext.load
 
-  def parse(input: String): Expr = parse(new Lexer(input, ignoreWhitespace = true), input)
+  /**
+    * Parse a Python expression from the given input string
+    * @throws ParseError if the input does not begin with a valid Python expression, or if there is leftover input
+    *                    after parsing an expression
+    */
+  def parse(input: String): Expr = {
+    val (result, remainder) = parseS(input)
+    if (remainder.nonEmpty)
+      parseError(input, "Remaining input after parsing; expected EOF", input.length - remainder.length, None)
+    result
+  }
 
-  def parse(lexer: Lexer, input: String): Expr = {
+  /**
+    * Parse a Python expression from the given input string, and return the parsed expression along with the remaining
+    * input
+    * @throws ParseError if the input does not begin with a valid Python expression
+    * @return a tuple of the parsed expression, along with the remaining input after parsing an expression (which may
+    *         be empty)
+    */
+  def parseS(input: String): (Expr, String) = {
+    val lexer = new Lexer(input, ignoreWhitespace = true)
+    val expr = parse(lexer, input)
+    (expr, if (lexer.currentOffset < input.length) input.substring(lexer.currentOffset) else "")
+  }
+
+  /**
+    * Parse given input as an expression, using given lexer.
+    * @throws ParseError if the input does not begin with a valid Python expression
+    */
+  private def parse(lexer: Lexer, input: String): Expr = {
     lexer.skip(Indent)
     try {
       val expr = expression(lexer)
       while(lexer.hasNext && lexer.isEmptyLine) {
         lexer.skipLine()
       }
-      if (lexer.nonEmpty && lexer.peek != EOF) {
-        throw new Exception("parser stopped early!")
-      }
       expr
     } catch {
-      case err@Error(msg, offset) =>
-        val nextNewline = input.indexOf('\n', offset) match {
-          case -1 => input.length
-          case n => n
-        }
-        var lineNumber = 1
-        var lastLineOffset = 0
-        var i = 0
-        while (i < offset) {
-          if (input.charAt(i) == '\n') {
-            lineNumber += 1
-            lastLineOffset = i
-          }
-          i += 1
-        }
-        val column = offset - lastLineOffset
-        val detailErr = ParseError(msg, offset, lineNumber, column, input.substring(lastLineOffset, nextNewline))
-        detailErr.setStackTrace(err.getStackTrace)
-        throw detailErr
+      case err@Error(msg, offset) => parseError(input, msg, offset, Some(err))
     }
+  }
+
+  private def parseError(input: String, msg: String, offset: Int, err: Option[Throwable]): Nothing = {
+    val (lineNumber, column, linePart) = posInfo(input, offset)
+    val detailErr = ParseError(msg, offset, lineNumber, column, linePart)
+    err.foreach(err => detailErr.setStackTrace(err.getStackTrace))
+    throw detailErr
+  }
+
+  private def posInfo(input: String, offset: Int): (Int, Int, String) = {
+    val nextNewline = input.indexOf('\n', offset) match {
+      case -1 => input.length
+      case n => n
+    }
+    var lineNumber = 1
+    var lastLineOffset = 0
+    var i = 0
+    while (i < offset) {
+      if (input.charAt(i) == '\n') {
+        lineNumber += 1
+        lastLineOffset = i
+      }
+      i += 1
+    }
+    val column = offset - lastLineOffset
+    (lineNumber, column, input.substring(lastLineOffset, nextNewline))
   }
 
   def star_expressions(tokens: Lexer): Seq[Expr] = {

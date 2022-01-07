@@ -21,11 +21,17 @@ object Quotable {
   implicit val bool: Quotable[Boolean] = instance(b => Constant(BooleanLiteral(b)))
 }
 
+/**
+  * A data structure which contains some statements and a mapping of quoted expressions, suspended in [[QuotedValue]].
+  * The idea here is that a [[Quotable]] instance could use side-effects when quoting (e.g. quote a large object
+  * or a DataFrame by writing it to a URI, and splice the necessary code for reading it in Python) and
+  * suspending it allows control over when those side effects happen (they happen when doQuote() is called)
+  */
 case class QuotedTree(
-  tree: CompleteTree,
+  tree: Module,
   symbols: Map[Name, QuotedValue[_]]
 ) {
-  def doQuoted(): CompleteTree = {
+  def doQuote(): CompleteTree = {
     val transformer = new TreeTransformer {
       override def transformModule(module: Module): Module = super.transformModule(module) match {
         case Module(stats) =>
@@ -41,7 +47,7 @@ case class QuotedTree(
         case expr => super.transformExpr(expr)
       }
     }
-    transformer.transformComplete(tree)
+    transformer.transformModule(tree)
   }
 }
 

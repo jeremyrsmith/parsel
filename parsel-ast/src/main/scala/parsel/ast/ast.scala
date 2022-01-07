@@ -15,6 +15,24 @@ object Tree {
   else
     decorators.map(e => s"$prefix@${e.pretty}").mkString(s"\n") + "\n"
   def formatElse(orElse: Seq[Statement], prefix: String, indent: String): String = if (orElse.nonEmpty) s"\n${prefix}else:\n" + Tree.formatBlock(orElse, prefix, indent) else ""
+
+  def asStats(tree: CompleteTree): Seq[Statement] = tree match {
+    case Module(body) => body
+    case stat: Statement => Seq(stat)
+    case expr: Expr => Seq(ExprStatement(expr))
+  }
+
+  def asStats(trees: Seq[CompleteTree]): Seq[Statement] = trees.flatMap(tree => asStats(tree))
+
+  def asStat(tree: CompleteTree): Statement = tree match {
+    case Module(body) => body.headOption.getOrElse(Pass())
+    case stat: Statement => stat
+    case expr: Expr => ExprStatement(expr)
+  }
+
+  def asExprs(expr: Expr): Seq[Expr] = Seq(expr)
+  def asExprs(exprs: Seq[Expr]): Seq[Expr] = exprs
+
 }
 
 
@@ -387,7 +405,7 @@ final case class StringLiteral(value: String, flags: Option[String] = None) exte
     case 11 => "\\v"
     case 12 => "\\f"
     case c if Character.isISOControl(c) => c.toInt.formatted("%#04x")
-    case c => Seq(c)
+    case c => c.toString
   }
 
   override def pretty: String = {
