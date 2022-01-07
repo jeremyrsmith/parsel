@@ -66,21 +66,23 @@ import parsel.quote.syntax._
 val myString = "hello quasiquotes!"
 val mySuffix = " Yippee!"
 
-// This will result in an Expr, where myString is spliced in as Constant(StringLiteral("hello quasiquotes!"))
+// This will result in an Expr, where myString is spliced in as:
+//     Constant(StringLiteral("hello quasiquotes!"))
 val exampleExpr: Expr = pye"my_function($myString)"
 
-// This will result in an AST, where mySuffix is spliced in as Constant(StringLiteral(" Yippee!")) in the same fashion,
-// and exampleExpr is spliced in as an AST directly
+// This will result in an AST, where mySuffix is spliced in as:
+//     Constant(StringLiteral(" Yippee!"))
+// in the same fashion, and exampleExpr is spliced in as an AST directly
 val example1: Module = py"""
     def my_function(str):
       return str + $mySuffix
     
     print($exampleExpr)
-    
   """
 
-// This will result in a QuotedTree. When doQuote is called, the resulting AST will contain code to memoize the spliced
-// value of myString by binding it to a fresh variable name, which is substituted in the quoted code.
+// This will result in a QuotedTree. When doQuote is called, the resulting
+// AST will contain code to memoize the spliced value of myString by binding
+// it to a fresh variable name, which is substituted in the quoted code.
 // This probably seems kind of useless, but I needed it for my motivating use case.
 val example2: QuotedTree = pyq"""
     $example1
