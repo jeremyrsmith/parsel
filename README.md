@@ -8,6 +8,21 @@ It has:
 * A parser for Python 3 programs. It's hand-written and is probably loaded with bugs.
 * Macro-based string interpolators for embedding Python 3 quasiquotes in your Scala code.
 
+Currently, parsel only supports Scala 2. This is because the macros for `parsel-quote` are written with the Scala 2
+macro API. It won't be that hard to port it, though – I just don't have a Scala 3 use case for this yet.
+
+## AST
+
+The AST data structures are in the `parsel-ast` module. They try to follow
+[Python's own AST data structures](https://docs.python.org/3/library/ast.html), as mentioned above. Some things are
+even kept in these data structures that aren't used in the parser – e.g. type comments (which are currently never
+populated, because I don't know what they are. Because the grammar doesn't describe them at all.)
+
+The common base trait of all the AST structures is `parsel.ast.Tree` (apologies that this will interfere with Scala
+macros's `Tree`). Every `Tree` has a no-args method `.pretty` which you can use to turn it back into a Python code string
+(say, if you want to evaluate it using [jep](https://github.com/ninia/jep) or
+[scalapy](https://github.com/shadaj/scalapy) or even a subprocess).
+
 ## Parser
 
 Parsel's parser is hand-written, because I couldn't make a performant parser with fastparse while working from
@@ -42,7 +57,7 @@ Parsel's quasiquotes allow you to embed python ASTs using a string interpolator,
 checked (well, parsed, at least) at compile time, giving a compiler error if the Python code is invalid. This is similar
 to the quasiquotes of Scala 2 macros. You can use this feature by depending on the `parsel-quotes` module.
 
-There three flavors of quasiquote, which are accessed by importing `parsel.quote.syntax._`:
+There are three flavors of quasiquote, which are accessed by importing `parsel.quote.syntax._`:
 
 * `py` quasiquotes contain Python statements. Quoted expressions are spliced eagerly as expression trees (see `Quotable`
   below), so this type of quasiquote results in a `Module` (which is just a container for a bunch of statements).
@@ -100,6 +115,16 @@ typeclass just has a method `doQuote`, which takes a value of type `T` and retur
 value. Instances are already defined for obvious constants, but I'm not sure how opinionated parsel ought to be about
 how things like collections and such ought to be quoted, so those aren't currently implemented (I'd be happy to hear
 feedback about this, but that would mean that you're using this library – and you probably shouldn't be).
+
+## Caveats
+
+These were mentioned earlier, but let's explicitly state them again:
+
+* The parser is probably loaded with bugs
+* Type comments are always `None`, because I don't know what those are
+* While I made an attempt to do `ExprContext` correctly, I have no idea what its utility is, nor what its semantics are.
+  So don't rely on it for anything.
+
 
 ## License & Copyright
 Copyright 2022 Jeremy Smith
