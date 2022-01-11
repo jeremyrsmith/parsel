@@ -428,7 +428,7 @@ final case class BytesLiteral(value: String, flags: String) extends Literal[Stri
     case 8 => "\\b"
     case 11 => "\\v"
     case 12 => "\\f"
-    case c => Seq(c)
+    case c => c.toString
   }.replace("0x", "0\\x")
   override def pretty: String = s"b'${escaped}'"
   override def equals(obj: Any): Boolean = obj match {
