@@ -12,6 +12,11 @@ package object syntax {
     def py(splices: Any*): Module = macro PySyntaxImpl.statsEagerSplice
 
     /**
+      * Same as [[py]], but strips a margin from the code like [[scala.collection.immutable.StringOps.stripMargin]] does
+      */
+    def pym(splices: Any*): Module = macro PySyntaxImpl.statsEagerSpliceMargin
+
+    /**
       * A Python quasiquote which suspends quotable expressions, resulting in a [[QuotedTree]].
       */
     def pyq(splices: Any*): QuotedTree = macro PySyntaxImpl.statsLazySplice

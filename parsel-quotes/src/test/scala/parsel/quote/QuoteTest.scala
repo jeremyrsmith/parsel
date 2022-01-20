@@ -42,6 +42,22 @@ class QuoteTest extends AnyFreeSpec with Matchers {
     }
   }
 
+  "pym" - {
+    "strips the margin" in {
+      val xxxxx = BigInt(10)
+      val yyy = "hi I'm ted"
+      val result =
+        pym"""
+            |a = $xxxxx
+            |b = $yyy"""
+
+      result shouldEqual Module(Seq(
+        Assign(Seq(Name("a")), Constant(IntegerLiteral(xxxxx)), None),
+        Assign(Seq(Name("b")), Constant(StringLiteral(yyy)), None)
+      ))
+    }
+  }
+
   "pyq" - {
     "works when values can be quoted" in {
       val xxxxx = 10

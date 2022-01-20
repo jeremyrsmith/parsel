@@ -12,9 +12,9 @@ private[quote] class PySyntaxImpl(override val c: whitebox.Context) extends Tree
 
   private val quotableType = weakTypeOf[Quotable[Any]].typeConstructor
 
-  private def parseOrAbort[T <: parsel.ast.Tree](parseCode: => T, pos: Position): T = try parseCode catch {
+  private def parseOrAbort[T <: parsel.ast.Tree](parseCode: => T, pos: Position, updateOffset: Int => Int = identity): T = try parseCode catch {
     case err@ParseError(msg, offset, line, col, lineStr) =>
-      val outerOffset = pos.start + offset
+      val outerOffset = pos.start + updateOffset(offset)
       val errPos = c.enclosingPosition.withPoint(outerOffset).withStart(outerOffset).withEnd(outerOffset)
       c.abort(errPos, s"Syntax error: $msg")
   }
@@ -22,11 +22,32 @@ private[quote] class PySyntaxImpl(override val c: whitebox.Context) extends Tree
   private def parseStatsOrAbort(code: String, pos: Position): parsel.ast.Module = parseOrAbort(Parser.parse(code), pos)
   private def parseExprOrAbort(code: String, pos: Position): parsel.ast.Expr = parseOrAbort(ExpressionParser.parse(code), pos)
 
-  def statsEagerSplice(splices: Tree*): Tree = splice(splices, false, parseStatsOrAbort)
-  def statsLazySplice(splices: c.Tree*): Tree = splice(splices, true, parseStatsOrAbort)
-  def exprEagerSplice(splices: c.Tree*): Tree = splice(splices, false, parseExprOrAbort)
+  private def parseStatsWithMargin(code: String, pos: Position): parsel.ast.Module = {
+    parseOrAbort(
+      Parser.parse(code.stripMargin),
+      pos,
+      // adjust the error offset by adding back in the margins that were stripped up to that point
+      // it tracks the total margin so far, and the stripped offset of the beginning of the line
+      // until the stripped offset is >= the error offset. Then, add back the accumulated margin.
+      offset => code.linesWithSeparators.scanLeft((0, 0, "")) {
+        case ((totalMargin, totalLength, prevLineStripped), line) =>
+          val stripped = line.stripMargin
+          (totalMargin + line.length - stripped.length, totalLength + prevLineStripped.length, stripped)
+      }.takeWhile(_._2 < offset).map(_._1).foldLeft(offset)((_, totalMargin) => offset + totalMargin)
+    )
+  }
 
-  private def splice(splices: Seq[c.Tree], suspend: Boolean, parser: (String, Position) => parsel.ast.Tree): Tree = c.prefix.tree match {
+  def statsEagerSplice(splices: Tree*): Tree = splice(splices, false, parseStatsOrAbort)
+  def statsEagerSpliceMargin(splices: Tree*): Tree = splice(splices, false, parseStatsWithMargin)
+  def statsLazySplice(splices: Tree*): Tree = splice(splices, true, parseStatsOrAbort)
+  def exprEagerSplice(splices: Tree*): Tree = splice(splices, false, parseExprOrAbort)
+
+  def statsString(code: Tree): Tree = code match {
+    case Literal(Constant(codeStr: String)) => reifyTree(parseStatsOrAbort(codeStr, code.pos))
+    case q"Predef.augmentString(${Literal(Constant(codeStr: String))}).stripMargin" => reifyTree(parseStatsWithMargin(codeStr, code.pos))
+  }
+
+  def splice(splices: Seq[c.Tree], suspend: Boolean, parser: (String, Position) => parsel.ast.Tree): Tree = c.prefix.tree match {
     case Apply(_, List(Apply(_, stringPartsTrees))) =>
       val stringParts = stringPartsTrees.map {
         case Literal(Constant(s: String)) => s
@@ -43,12 +64,13 @@ private[quote] class PySyntaxImpl(override val c: whitebox.Context) extends Tree
         case (strPart, tree) =>
           val len = tree match {
             case tree@Ident(name) if tree.pos.start > 0 && tree.pos.start < fileContent.length && fileContent(tree.pos.start - 1) == '{' =>
-              name.encodedName.toString.length - 3
+              name.encodedName.toString.length + 3
             case Ident(name) =>
-              name.encodedName.toString.length - 1
+              name.encodedName.toString.length + 1
+            case EmptyTree => 0
             case tree =>
               // this will almost always be wrong, but it's the best we can do without range positions
-              showCode(tree).length - 3
+              showCode(tree).length + 3
           }
           strPart + ("a" * len)
       }.mkString
@@ -100,19 +122,22 @@ private[quote] class PySyntaxImpl(override val c: whitebox.Context) extends Tree
         }
       }
 
-      val ast = treeSplicer.transform(reifyTree(parser(code, stringPartsTrees.head.pos)))
+      val ast = if (splices.nonEmpty)
+        treeSplicer.transform(reifyTree(parser(code, stringPartsTrees.head.pos)))
+      else
+        reifyTree(parser(code, stringPartsTrees.head.pos))
 
       val quotedNames = quotes.filterNot(_._3 == EmptyTree)
         .map(q => q._1.name -> (q._2, q._3))
         .toMap
 
-      if (suspend) {
+      if (suspend && splices.nonEmpty) {
         val quotedValuesMapElems = quotedNames.values.toList.map {
           case (nameCode, quotedValue) => q"($nameCode, $quotedValue)"
         }
 
         q"_root_.parsel.quote.QuotedTree($ast, _root_.scala.Predef.Map(..$quotedValuesMapElems))"
-      } else {
+      } else if (splices.nonEmpty) {
         val valueSplicer = new Transformer {
           override def transform(tree: Tree): Tree = tree match {
             case q"_root_.parsel.ast.Name(${Literal(Constant(name: String))})" if quotedNames.contains(name) =>
@@ -121,7 +146,7 @@ private[quote] class PySyntaxImpl(override val c: whitebox.Context) extends Tree
           }
         }
         valueSplicer.transform(ast)
-      }
+      } else ast
 
     case _ => c.abort(c.enclosingPosition, "Unexpected tree: must be a string literal quoted with `py`")
   }
